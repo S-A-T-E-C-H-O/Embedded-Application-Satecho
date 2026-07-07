@@ -1,0 +1,9 @@
+# Local credentials — copy ESP32/src/satecho_secrets.example.h to
+# ESP32/src/satecho_secrets.h and keep it out of git.
+ESP32/src/satecho_secrets.h
+
+# Build artifacts
+.pio/
+build/
+*.bin
+*.elf

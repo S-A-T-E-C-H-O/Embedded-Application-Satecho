@@ -88,18 +88,38 @@
 #define WIFI_MAX_RETRIES        5
 
 // =============================================================================
-// NETWORK
+// NETWORK / SECRETS
+// -----------------------------------------------------------------------------
+// Real credentials belong in src/satecho_secrets.h (git-ignored). Copy
+// src/satecho_secrets.example.h to src/satecho_secrets.h and edit it there.
+// The #defines below are non-production development fallbacks kept so the
+// firmware still compiles without a local secrets file.
 // =============================================================================
+#if __has_include("satecho_secrets.h")
+  #include "satecho_secrets.h"
+#endif
+
+#ifndef WIFI_SSID
 #define WIFI_SSID            "SATECHO_Field"
+#endif
+#ifndef WIFI_PASSWORD
 #define WIFI_PASSWORD        "AgroSafe2026!"
+#endif
 
 // The ESP32 communicates ONLY through MQTT with the Edge (no direct REST/JWT to the backend).
 // The Edge validates/injects this shared secret; it must match mqtt.edge.api-key in the backend.
+#ifndef MQTT_EDGE_API_KEY
 #define MQTT_EDGE_API_KEY    "edge-shared-secret-change-me"
+#endif
 
-// MQTT broker (same IP as the backend in the prototype)
+// MQTT broker — ONE broker per environment shared by backend, Edge, mobile
+// and firmware. Contract: docs/mqtt-contract.md at the ecosystem root.
+#ifndef MQTT_BROKER_HOST
 #define MQTT_BROKER_HOST     "satecho-mqtt-demo-cientifica.eastus.azurecontainer.io"
+#endif
+#ifndef MQTT_BROKER_PORT
 #define MQTT_BROKER_PORT     1883
+#endif
 #define MQTT_KEEPALIVE       60
 #define MQTT_QOS             1
 
