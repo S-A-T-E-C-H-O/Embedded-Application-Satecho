@@ -50,6 +50,7 @@ TimerHandle_t sensorTimer = nullptr;
 TimerHandle_t networkTimer = nullptr;
 TimerHandle_t telemetryTimer = nullptr;
 TimerHandle_t safetyTimer = nullptr;
+TimerHandle_t statusTimer = nullptr;
 
 // =============================================================================
 // Remote MQTT command structure
@@ -158,11 +159,32 @@ void safetyTimerCallback(TimerHandle_t xTimer) {
   if (readPIR() && pirDebounce()) {
     xEventGroupSetBits(systemEvents, EVENT_PIR_TRIGGERED);
     Serial.println(F("[SAFETY] PIR: Motion detected"));
-    // pulse_duration_ms=0 (ESP32 does not measure pulse), triggers_per_minute=1
-    // (the debounce guarantees 1 trigger here). The Edge derives PERSON/ANIMAL/WIND.
-    const char* secJson = buildRawSecurityPayload(0.0f, 1);
-    publishMQTT(MQTT_TOPIC_RAW_SECURITY, secJson);
+    // Timer callbacks must not perform blocking MQTT I/O (Timer Service Task
+    // context). Enqueue the event; mqttCommandTask publishes it safely.
+    RemoteCommand pirCmd;
+    strncpy(pirCmd.action, "PIR_EVENT", sizeof(pirCmd.action) - 1);
+    pirCmd.action[sizeof(pirCmd.action) - 1] = '\0';
+    pirCmd.durationMinutes = 0;
+    xQueueSend(remoteCmdQueue, &pirCmd, 0);
   }
+}
+
+// =============================================================================
+// TIMER CALLBACK 5: STATUS — Periodic device status report (every 60s)
+// =============================================================================
+/*
+ * The mobile app subscribes to agrosafe/{farm}/devices/{device}/status; before
+ * this timer existed, status was only published on an explicit STATUS_REQUEST
+ * command that nothing sends, so subscribers never received anything.
+ * The callback only enqueues — the blocking MQTT publish happens in
+ * mqttCommandTask (a regular task), never in the Timer Service Task.
+ */
+void statusTimerCallback(TimerHandle_t xTimer) {
+  RemoteCommand statusCmd;
+  strncpy(statusCmd.action, "STATUS_REQUEST", sizeof(statusCmd.action) - 1);
+  statusCmd.action[sizeof(statusCmd.action) - 1] = '\0';
+  statusCmd.durationMinutes = 0;
+  xQueueSend(remoteCmdQueue, &statusCmd, 0);
 }
 
 // =============================================================================
@@ -225,6 +247,11 @@ void mqttCommandTask(void* param) {
   else if (strcmp(cmd.action, "STATUS_REQUEST") == 0) {
     int uptime = xTaskGetTickCount() * portTICK_PERIOD_MS / 1000;
     publishMQTT(MQTT_TOPIC_STATUS, buildStatusPayload(systemHealth, 0, uptime));
+  }
+  else if (strcmp(cmd.action, "PIR_EVENT") == 0) {
+    // pulse_duration_ms=0 (ESP32 does not measure pulse), triggers_per_minute=1
+    // (the debounce guarantees 1 trigger). The Edge derives PERSON/ANIMAL/WIND.
+    publishMQTT(MQTT_TOPIC_RAW_SECURITY, buildRawSecurityPayload(0.0f, 1));
   }
 
   // Tail recursion: process the next command (without while)
@@ -317,6 +344,8 @@ void setup() {
     "Telemetry", pdMS_TO_TICKS(PERIOD_TELEMETRY_BATCH_MS), pdTRUE, nullptr, telemetryTimerCallback);
   safetyTimer = xTimerCreate(
     "Safety", pdMS_TO_TICKS(PERIOD_SAFETY_CHECK_MS), pdTRUE, nullptr, safetyTimerCallback);
+  statusTimer = xTimerCreate(
+    "Status", pdMS_TO_TICKS(PERIOD_STATUS_REPORT_MS), pdTRUE, nullptr, statusTimerCallback);
 
   // ─── 4. START ASYNCHRONOUS WiFi ───
   xTaskCreatePinnedToCore(wifiInitTask, "WiFi-Init", 4096, nullptr, 3, nullptr, 0);
@@ -329,8 +358,9 @@ void setup() {
   xTimerStart(networkTimer, 0);
   xTimerStart(telemetryTimer, 0);
   xTimerStart(safetyTimer, 0);
+  xTimerStart(statusTimer, 0);
 
-  Serial.println(F("[INIT] 4 timers + 2 FreeRTOS tasks launched.\n"));
+  Serial.println(F("[INIT] 5 timers + 2 FreeRTOS tasks launched.\n"));
 
   // ─── 7. GIVE FULL CONTROL TO THE KERNEL ───
   vTaskDelete(NULL);
